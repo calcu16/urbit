@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 from ast import literal_eval
-from re import sub
+from re import match, sub
 from sys import stdin,stdout
 
+
+DEBUG = False
+def debug(line):
+  global DEBUG
+  if DEBUG:
+    print(line)
+
 def parse(line):
+  line = sub(r"%([a-zA-Z0-9_.~-]+)", (lambda m : str(int.from_bytes(m.group(1).encode('UTF8'),'big'))), line)
   line = line.strip().replace(".","")
   line = sub(r"([a-zA-Z?_][a-zA-Z0-9?_]*)",r"'\1'", line)
   line = sub(r"\s+",",",line)
@@ -23,6 +31,15 @@ def flatten(nock):
       nock = nock[0]
   return nock
 
+def tryAsNoun(nock):
+  try:
+    out = nock.to_bytes((nock.bit_length() // 8) + 1, byteorder='big').decode('UTF8')
+  except UnicodeDecodeError:
+    return nock
+  if match("^[a-zA-Z0-9_.~-]+$", out):
+    return "%%%s" % out
+  return nock
+
 def sell(nock):
   if type(nock) == list:
     return "[%s]" % " ".join(sell(n) for n in nock)
@@ -30,8 +47,12 @@ def sell(nock):
     try:
       return "%s%s" % tuple(sell(n) for n in nock)
     except TypeError:
-      print(nock)
+      debug(nock)
       raise
+  if type(nock) == int:
+    nock = tryAsNoun(nock)
+  if type(nock) == int:
+    nock = "{:,d}".format(nock).replace(",",".")
   return str(nock)
 
 sym = "*/?+=$"
@@ -47,6 +68,13 @@ def join(a, *b):
     elif not len(b): return a
     elif type(b[0]) is str and b[0] in sym: return [a,b]
     else: return [a] + list(b)
+
+def peg(a, b):
+  l = 0
+  while (1 << l) <= b:
+    l += 1
+  l -= 1
+  return (a << l) | (b & ~(1 << l))
 
 def branch(n, l, r, *rs):
   if n < 1:
@@ -104,8 +132,27 @@ def call(num, pay, *args):
   try:
     return funs[num](pay, *args)
   except (TypeError,KeyError) as e:
-    print(e)
+    debug(e)
     return ('*', join(pay,num,args))
+
+def collapse(nock):
+  while True:
+    if len(nock) != 2:
+      break
+    func, arg = nock
+    if func != '/' or type(arg) not in {list, tuple} or len(arg) != 2:
+      break
+    a, arg = arg
+    if type(a) != int or type(arg) != tuple or len(arg) != 2:
+      break
+    func, arg = arg
+    if func != '/' or type(arg) not in {list, tuple} or len(arg) != 2:
+      break
+    b, arg = arg
+    nock = ('/', join(peg(a,b), arg))
+  return nock
+  
+    
 
 def eval(*nock):
   global EVAL
@@ -113,9 +160,9 @@ def eval(*nock):
     nock = nock[0]
   else:
     nock = (nock[0], join(*nock[1:]))
+  nock = collapse(nock)
   if type(nock) != tuple:
     return nock
-  return nock
   func, arg = nock
   try:
     if type(arg) in {list,tuple}:
@@ -123,12 +170,14 @@ def eval(*nock):
     else:
       return funs[func](arg)
   except (TypeError,KeyError) as e:
-    print(e)
+    debug(e)
     return nock
 
 def uneval(nock):
-  if type(nock) is tuple:
+  if type(nock) is tuple and nock[0] == '*':
     return True
+  elif type(nock) is tuple:
+    return uneval(nock[1])
   elif type(nock) is list:
     return any(uneval(item) for item in nock)
   else:
@@ -139,6 +188,7 @@ def step(nock):
     func, arg = nock
     if uneval(arg):
       return eval(func,step(arg))
+    func, arg = eval(func,step(arg))
     try:
        if type(arg) in {list,tuple}:
          return funs[func](*join(*arg))
@@ -190,6 +240,7 @@ def main():
     except KeyboardInterrupt:
       print()
     else:
+      print()
       break
 
 if __name__ == "__main__":
